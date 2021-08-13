@@ -13,6 +13,7 @@ import csv
 import os
 import pandas as pd
 from datetime import date
+import yfinance as yf
 #import numpy as numpee
 
 
@@ -140,6 +141,8 @@ class FidelityScraper:
                 self.__webSession.find_element_by_xpath('//*[@id="AccountActivityTabHistory"]/div/div/div/div[3]/a').click()
                 time.sleep(0.5) 
 
+        self.scrape_account_positions()
+
         print("all activity downloaded")
         self.close_web_session()
         return True
@@ -170,6 +173,8 @@ class FidelityScraper:
             os.remove(pastQuarter)
         masterList.to_csv('acnts\\AllTrades.csv')
 
+
+
         return
 
     #Functions only close web session if something fails. This can be called by user in case everything
@@ -185,3 +190,22 @@ class FidelityScraper:
         
         print("web session already closed")
         return
+
+
+    #This function takes in a ticker symbol and will add stock history CSV to the acnts\StockData
+    #directory if it does not already exist
+    def getStockData(self):
+
+        activePos = pd.read_csv('.\\acnts\\AllTrades.csv', header=0)
+        activePos.dropna(subset=['Symbol'], inplace = True)
+        filtCash = activePos['Symbol'].str.find('**') == -1 #get cash out of search
+        activePos = activePos[filtCash]
+
+        for ticker in activePos.groupby('Symbol'): 
+            print()
+            print(ticker[0].strip()) #newline
+            print(yf.Ticker(ticker[0].strip()).history(period="1d"))
+            time.sleep(0.5)
+            
+
+        
