@@ -12,7 +12,7 @@ import glob
 import csv
 import os
 import pandas as pd
-from datetime import date
+from datetime import datetime
 import yfinance as yf
 #import numpy as numpee
 
@@ -99,15 +99,16 @@ class FidelityScraper:
 
     #function will download just the existing postions of the account with credentials in the class,
     #returns True if and only if account positions are downloaded from web session, else its false
-    def scrape_account_positions(self):
+    def __scrape_account_positions(self):
 
         if self.__login() == False:
             print("Account positions scrape failed")
             return False
 
         try:
-            self.__webSession.find_element_by_xpath('//*[@id="tab-2"]').click()
             time.sleep(1)
+            self.__webSession.find_element_by_xpath('//*[@id="moretab-area"]/div[2]/ul/li[2]').click()
+            time.sleep(2)
             self.__webSession.find_element_by_xpath('//*[@id="tabContentPositions"]/div[2]/div/div[1]/div[4]/div[3]/div[2]/a').click()
             time.sleep(3)
         except Exception as exe:
@@ -123,7 +124,11 @@ class FidelityScraper:
 
     #This like likely be the most called function. This should be called pretty much daily to retrieve
     #any trades happening on the account. This is also how dividends will be accounted for.
-    def scrape_past_activity(self):
+    def scrape_activity(self):
+
+        #clearing bin and acnts directories that we need to store/download data in
+        for f in os.listdir('./bin//'): os.remove(os.path.join( './bin//' , f ))
+        for f in os.listdir('./acnts//'): os.remove(os.path.join('./acnts//' , f ))
 
         self.__login()
         self.__webSession.execute_script("window.scrollTo(0, 512)")
@@ -141,22 +146,36 @@ class FidelityScraper:
                 self.__webSession.find_element_by_xpath('//*[@id="AccountActivityTabHistory"]/div/div/div/div[3]/a').click()
                 time.sleep(0.5) 
 
-        self.scrape_account_positions()
+        self.__scrape_account_positions()
 
         print("all activity downloaded")
         self.close_web_session()
         return True
 
-    #this will compile all scraped data into one file so all data is consolidated
+    #this will compile all scraped data into one file so all data is consolidated this will remove any
+    #existing files from relevant directories so that each 
     def compile_data(self):
 
-        currentQuarter = self.__pathName + "Accounts_History.csv"
-        assert(os.path.isfile(currentQuarter)) #Give menaingful error one day, makes sure that there is a data file to compile
+        #Cleans and moves active positions data to another directory
+        activePos = glob.glob(self.__pathName + 'Portfolio*')
+        assert( len( activePos ) > 0)  # make sure there is and active posistions file
+        myPos = pd.read_csv( activePos[ 0 ] , header = 0 )
+        myPos.dropna( subset = [ 'Symbol' ] , inplace = True )
+        filtCash = myPos['Symbol'].str.find('**') == -1 #Fidelity denotes cash positions with '**' this gets rid of cash positions
+        myPos = myPos[filtCash]
+        myPos.to_csv('./acnts/ActivePositions.csv')
+        os.remove(activePos[0])
+
+        #Goes through each file of trades and aggregates all trades to one file in another directory
+        currentQuarter = self.__pathName + "Accounts_History.csv"   #need at least one file here
+        assert(os.path.isfile(currentQuarter)) #make sure data is there
         masterList = pd.read_csv(currentQuarter, skiprows=3, header=0)
         masterList.dropna(subset=['Action'], inplace=True)
         masterList['Run Date'] = pd.to_datetime(masterList['Run Date'])
         lastDate = masterList['Run Date'].min()
+
         os.remove(currentQuarter)
+
         activityFiles = glob.glob(self.__pathName + "*.csv")
 
         for pastQuarter in activityFiles:
@@ -171,11 +190,10 @@ class FidelityScraper:
                 masterList = pd.concat([masterList,tempDF])
 
             os.remove(pastQuarter)
+
         masterList.to_csv('acnts\\AllTrades.csv')
 
-
-
-        return
+        return True
 
     #Functions only close web session if something fails. This can be called by user in case everything
     #works right and they need to close the session gracefully. Not sure if this will ever be needed but
@@ -196,16 +214,27 @@ class FidelityScraper:
     #directory if it does not already exist
     def getStockData(self):
 
-        activePos = pd.read_csv('.\\acnts\\AllTrades.csv', header=0)
-        activePos.dropna(subset=['Symbol'], inplace = True)
-        filtCash = activePos['Symbol'].str.find('**') == -1 #get cash out of search
-        activePos = activePos[filtCash]
+        activePos = pd.read_csv('./acnts//ActivePositions.csv')
 
-        for ticker in activePos.groupby('Symbol'): 
-            print()
-            print(ticker[0].strip()) #newline
-            print(yf.Ticker(ticker[0].strip()).history(period="1d"))
+        for ticker in activePos['Symbol']:
+
+            fn = './bin//' + ticker + '.csv'
+
+            if os.path.isfile( fn ):
+
+                with open( fn , 'r' ) as f: 
+                    dateStr = str( f.readlines()[ -1 ][ 0 : 10 ])   #get last date info was added so we only import whats needed
+
+                if datetime.strptime( dateStr , '%Y-%m-%d').date() == datetime.today().date() : continue #makes sure that we are only getting data if there is missng data
+                
+                tickerData = yf.Ticker(ticker).history(start=dateStr)
+                tickerData = tickerData.iloc[ 1: ]    #prevents data from being doubled in csv file
+                tickerData.to_csv( fn , mode = 'a' , header = False)
+
+            else:
+                tickerData = yf.Ticker(ticker).history(period = "max")
+                tickerData.to_csv('./bin//' + ticker + '.csv')
+
             time.sleep(0.5)
-            
 
-        
+        return
